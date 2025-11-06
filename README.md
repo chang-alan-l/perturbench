@@ -15,15 +15,46 @@ If you use PerturBench in your work, please consider citing [Wu, Wershof, Shmon,
 ```
 
 ## Install PerturBench
-```
-conda create -n [env-name] python=3.11
-conda activate [env-name]
-cd [/path/to/PerturBench/]
+
+### Basic Installation
+
+```bash
+conda create -n perturbench python=3.11
+conda activate perturbench
+cd /path/to/PerturBench/
 pip3 install -e .
 # or
 pip3 install -e .[cli]
 ```
 for command line extras such as the `rich` package, which gives you neater progress bars.
+
+### GPU Setup
+
+PerturBench supports GPU acceleration via PyTorch. To run with GPU support:
+
+1. **Install PyTorch with CUDA support** (if not already installed):
+```bash
+# For CUDA 11.8
+pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+
+# For CUDA 12.1
+pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+
+# Check your CUDA version with: nvidia-smi
+```
+
+2. **Verify GPU availability**:
+```bash
+python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
+python -c "import torch; print(f'GPU count: {torch.cuda.device_count()}')"
+```
+
+### System Requirements
+
+- **CPU-only**: Any modern multi-core processor (training will be slower)
+- **GPU (recommended)**: NVIDIA GPU with at least 8GB VRAM for small datasets, 16GB+ for larger datasets
+- **RAM**: At least 16GB recommended
+- **Python**: 3.10 or higher
 
 ## Downloading and Preparing Datasets
 
@@ -53,6 +84,95 @@ split = jiang24_accessor.get_split()
 ```
 
 The Frangieh21, Jiang24, and OP3 datasets require manual splits that can be generated using the `notebooks/neurips2025/build_jiang24_frangieh21_splits.ipynb` and the `notebooks/neurips2025/data_curation/curate_op3.ipynb` notebook. For the McFalineFigueroa23 data scaling experiments and the Srivatsan20 imbalance experiments, you can generate the custom splits using the `notebooks/build_data_scaling_splits.ipynb` and `notebooks/build_imbalance_splits.ipynb` notebooks respectively.
+
+## Running the Perturbation Benchmark
+
+### Quick Start: Running a Model Locally
+
+After installation and dataset preparation, you can train and evaluate models using the `train` command:
+
+#### 1. Running with GPU (Default)
+```bash
+# Train a linear model on the Norman19 dataset with GPU
+train experiment=neurips2025/norman19/linear_best_params_norman19
+
+# The default trainer config uses GPU with mixed precision (FP16) for faster training
+# This is equivalent to:
+train experiment=neurips2025/norman19/linear_best_params_norman19 trainer=gpu
+```
+
+#### 2. Running with CPU
+```bash
+# Train on CPU (slower, but works without GPU)
+train experiment=neurips2025/norman19/linear_best_params_norman19 trainer=cpu
+```
+
+#### 3. Running with Multiple GPUs
+```bash
+# Use multiple GPUs (e.g., 4 GPUs)
+train experiment=neurips2025/norman19/linear_best_params_norman19 trainer.devices=4
+
+# Or select specific GPU devices
+CUDA_VISIBLE_DEVICES=0,1 train experiment=neurips2025/norman19/linear_best_params_norman19 trainer.devices=2
+```
+
+#### 4. Customizing Training Parameters
+```bash
+# Adjust batch size and epochs
+train experiment=neurips2025/norman19/linear_best_params_norman19 \
+  data.batch_size=128 \
+  trainer.max_epochs=100
+
+# Change precision (32-bit, 16-bit mixed precision, or bfloat16)
+train experiment=neurips2025/norman19/linear_best_params_norman19 trainer.precision=32
+```
+
+### Available Datasets and Models
+
+The following pre-configured experiments are available:
+
+**Datasets**:
+- `norman19`: Norman et al. 2019 (genetic perturbations)
+- `sciplex3`: Srivatsan et al. 2020 (chemical perturbations)
+- `frangieh21`: Frangieh et al. 2021 (genetic perturbations)
+- `jiang24`: Jiang et al. 2024
+- `mcfaline23`: McFaline-Figueroa et al. 2023 (available in small/medium/full sizes)
+- `op3`: OP3 dataset
+
+**Models**:
+- `linear`: Linear additive model
+- `latent`: Latent additive model
+- `decoder`: Decoder-based model
+- `cpa`: Compositional Perturbation Autoencoder
+- `cpa_no_adv`: CPA without adversarial training
+- `sams`: SAMS-VAE model
+- `biolord`: BioLORD model
+
+### Example Commands
+
+```bash
+# Train CPA model on Norman19 with GPU
+train experiment=neurips2025/norman19/cpa_best_params_norman19
+
+# Train on ScipLex3 dataset with CPU
+train experiment=neurips2025/sciplex3/latent_best_params_sciplex3 trainer=cpu
+
+# Run on smaller McFaline dataset with custom settings
+train experiment=neurips2025/mcfaline23/cpa_best_params_mcfaline23_small \
+  trainer.max_epochs=200 \
+  data.batch_size=256
+```
+
+### Monitoring Training Progress
+
+By default, training progress is displayed in the terminal. You can also use TensorBoard or MLflow for monitoring:
+
+```bash
+# TensorBoard logs are saved to outputs/ by default
+tensorboard --logdir outputs/
+
+# View logs in the browser at http://localhost:6006
+```
 
 ## Usage
 
@@ -201,9 +321,85 @@ CUDA_VISIBLE_DEVICES=0,1 train hpo=latent_additive_hpo experiment=neurips2024/no
 
 ### Reproducing arXiv results
 To reproduce the results from our ArXiv preprint, we provide best-params configs for each model and dataset. For example, to reproduce the linear model results for the Norman19 dataset, you can run:
+```bash
+train experiment=neurips2025/norman19/linear_best_params_norman19
 ```
-train experiment=neurips2024/norman19/linear_best_params_norman19
+
+All experiments were originally run with GPU acceleration. If you encounter GPU memory issues, you can try:
+- Reducing batch size: `data.batch_size=64` (or lower)
+- Using CPU: `trainer=cpu` (slower but requires less memory)
+- Using gradient accumulation: `trainer.accumulate_grad_batches=2`
+
+## Troubleshooting
+
+### GPU Issues
+
+**Problem: "CUDA out of memory"**
+```bash
+# Solution 1: Reduce batch size
+train experiment=neurips2025/norman19/cpa_best_params_norman19 data.batch_size=32
+
+# Solution 2: Use gradient accumulation (effective batch size = batch_size * accumulate_grad_batches)
+train experiment=neurips2025/norman19/cpa_best_params_norman19 \
+  data.batch_size=32 \
+  trainer.accumulate_grad_batches=4
+
+# Solution 3: Disable mixed precision (uses more memory but can avoid some errors)
+train experiment=neurips2025/norman19/cpa_best_params_norman19 trainer.precision=32
+
+# Solution 4: Fall back to CPU
+train experiment=neurips2025/norman19/cpa_best_params_norman19 trainer=cpu
 ```
+
+**Problem: "CUDA not available" despite having a GPU**
+```bash
+# Check if PyTorch can see CUDA
+python -c "import torch; print(torch.cuda.is_available())"
+
+# If False, reinstall PyTorch with CUDA support
+pip3 uninstall torch torchvision
+pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+
+# Verify CUDA version matches PyTorch
+nvidia-smi  # Check CUDA version
+```
+
+**Problem: Training is slow even with GPU**
+```bash
+# Check if GPU is being used
+nvidia-smi  # Should show python process using GPU memory
+
+# Ensure you're using GPU trainer (default)
+train experiment=neurips2025/norman19/linear_best_params_norman19 trainer=gpu
+
+# Enable mixed precision for faster training (default)
+train experiment=neurips2025/norman19/linear_best_params_norman19 trainer.precision=16
+```
+
+### Data Issues
+
+**Problem: "Dataset not found"**
+```bash
+# Download datasets using the built-in command
+download --data-cache-dir=/path/to/your/data/directory
+
+# Or use dataset accessors in Python
+python -c "from perturbench.data.accessors.norman19 import Norman19; Norman19().get_anndata()"
+```
+
+**Problem: Setting custom data directory**
+```bash
+# Set data directory in your experiment config or via command line
+train experiment=neurips2025/norman19/linear_best_params_norman19 \
+  paths.data_dir=/path/to/your/data/directory
+```
+
+### General Tips
+
+- **Monitor GPU usage**: Run `nvidia-smi -l 1` in a separate terminal to monitor GPU utilization
+- **Check logs**: Training logs are saved to `outputs/` directory by default
+- **Reproducibility**: Set a seed for reproducible results: `seed=12345`
+- **Debug mode**: Add `trainer.fast_dev_run=True` to quickly test if your setup works (runs 1 batch only)
 
 ## Model development requirements
 
