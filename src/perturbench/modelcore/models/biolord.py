@@ -32,7 +32,6 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 import torch
 import torch.nn.functional as F
 import lightning as L
-import numpy as np
 
 from ..nn.mlp import MLP
 from .base import PerturbationModel
@@ -104,19 +103,17 @@ class BiolordStar(PerturbationModel):
         if n_perts is not None:
             self.n_perts = n_perts
 
-        n_total_covariates = np.sum(
-            [
-                len(unique_covs)
-                for unique_covs in datamodule.train_context[
-                    "covariate_uniques"
-                ].values()
-            ]
-        )
+        # Create separate embedding for each covariate type
+        covariate_uniques = datamodule.train_context["covariate_uniques"]
+        self.lord_embedding = torch.nn.ParameterDict()
+        for cov, unique_covs in covariate_uniques.items():
+            self.lord_embedding[cov] = torch.nn.Parameter(
+                torch.randn(latent_dim, len(unique_covs))
+            )
 
-        decoder_input_dim = 3 * latent_dim
-        self.lord_embedding = torch.nn.Parameter(
-            torch.randn(latent_dim, n_total_covariates)
-        )
+        # Decoder input: latent expression + latent perturbation + latent covariates (one per covariate type)
+        n_covariate_types = len(covariate_uniques)
+        decoder_input_dim = (2 + n_covariate_types) * latent_dim
         self.gene_encoder = MLP(
             self.n_genes, encoder_width, latent_dim, n_layers, dropout
         )
@@ -146,9 +143,15 @@ class BiolordStar(PerturbationModel):
         )
         latent_perturbation = self.pert_encoder(perturbation)
 
-        latent_covariates = torch.vstack(
-            [self.lord_embedding[:, cov.bool()].T for cov in covariates["cell_type"]]
-        )
+        # Process all covariates dynamically
+        latent_covariates_list = []
+        for cov, cov_values in covariates.items():
+            latent_covariates_list.append(
+                torch.vstack(
+                    [self.lord_embedding[cov][:, val.bool()].T for val in cov_values]
+                )
+            )
+        latent_covariates = torch.hstack(latent_covariates_list)
         latent_perturbed_expression = torch.cat(
             [
                 latent_observed_perturbed_expression,
